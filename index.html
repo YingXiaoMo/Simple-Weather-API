@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的位置与天气 | Weather API</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌤️</text></svg>">
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #333;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 2.5rem;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+            width: 90%;
+            max-width: 360px;
+            backdrop-filter: blur(10px);
+            transition: transform 0.3s ease;
+        }
+        .card:hover { transform: translateY(-5px); }
+        h1 { margin: 0 0 1.5rem; font-size: 1.4rem; color: #444; font-weight: 700; }
+        .data-row { margin: 1rem 0; }
+        .label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+        .value { font-size: 1.2rem; font-weight: 600; word-break: break-all; color: #2d3748; }
+        .weather-big { font-size: 3.5rem; margin: 15px 0 5px; font-weight: 800; color: #2d3748; line-height: 1; }
+        .weather-desc { font-size: 1.1rem; color: #4a5568; margin-bottom: 5px; font-weight: 500; }
+        .divider { height: 1px; background: #eee; margin: 1.5rem 0; }
+        .loading { color: #666; animation: pulse 1.5s infinite; font-size: 0.9rem; }
+        .source-tag { font-size: 0.7rem; color: #bbb; margin-top: 15px; }
+        
+        .github-link { margin-top: 25px; display: flex; justify-content: center; }
+        .github-btn {
+            display: flex; align-items: center; gap: 6px;
+            text-decoration: none; color: #666; font-size: 0.9rem;
+            padding: 6px 12px; border-radius: 20px;
+            transition: all 0.2s; background: #f7f7f7;
+            border: 1px solid #eee;
+        }
+        .github-btn:hover { background: #333; color: #fff; border-color: #333; transform: scale(1.05); }
+        .github-btn svg { fill: currentColor; transition: fill 0.2s; }
+
+        @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>👋 欢迎访问</h1>
+    
+    <div id="geo-box">
+        <p class="loading">正在定位您的位置...</p>
+    </div>
+
+    <div id="weather-box" style="display: none;">
+        <div class="divider"></div>
+        <p class="loading">正在获取天气...</p>
+    </div>
+
+    <div class="github-link">
+        <a href="https://github.com/yingxiaomo/simple-weather-api" target="_blank" class="github-btn">
+            <svg height="20" viewBox="0 0 16 16" width="20"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+            <span>Star on GitHub</span>
+        </a>
+    </div>
+</div>
+
+<script>
+    async function init() {
+        const geoBox = document.getElementById('geo-box');
+        const weatherBox = document.getElementById('weather-box');
+
+        try {
+            const geoRes = await fetch('/api/geo');
+            const geo = await geoRes.json();
+            geoBox.innerHTML = `
+                <div class="data-row">
+                    <div class="label">IP 地址 (${geo.type || 'IPv4'})</div>
+                    <div class="value" style="font-family: monospace; font-size: 1rem;">${geo.ip || '未知'}</div>
+                </div>
+                <div class="data-row">
+                    <div class="label">当前位置</div>
+                    <div class="value">${geo.city}</div>
+                </div>
+            `;
+
+            if (geo.latitude && geo.longitude) {
+                weatherBox.style.display = 'block';
+                
+                const weatherRes = await fetch(`/api/weather?lat=${geo.latitude}&lon=${geo.longitude}&city=${encodeURIComponent(geo.city)}`);
+                const weatherData = await weatherRes.json();
+
+                if (weatherData.status === 'ok') {
+                    const w = weatherData.data;
+                    weatherBox.innerHTML = `
+                        <div class="divider"></div>
+                        <div class="weather-big">${w.temp}°</div>
+                        <div class="weather-desc">${w.weather}</div>
+                        <div class="label" style="color:#666">${w.wind}</div>
+                        <div class="source-tag">
+                            数据来源: ${weatherData.source}
+                            <br>
+                            <span style="font-size:0.6rem; opacity:0.6; margin-top:4px; display:inline-block;">仅供个人学习使用</span>
+                        </div>
+                    `;
+                } else {
+                    weatherBox.innerHTML = `<div class="divider"></div><p style="color:#e53e3e">暂无天气数据</p>`;
+                }
+            }
+
+        } catch (e) {
+            console.error(e);
+            geoBox.innerHTML = `<p style="color:#e53e3e">加载失败，请检查网络</p>`;
+        }
+    }
+
+    init();
+</script>
+
+</body>
+</html>
