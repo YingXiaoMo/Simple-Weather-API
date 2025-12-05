@@ -1,63 +1,13 @@
 // functions/api/weather.js - Cloudflare 
-
-function generateRandomIP() {
-  const segments = [[110, 125], [116, 124], [220, 223], [180, 183], [218, 220]];
-  const segment = segments[Math.floor(Math.random() * segments.length)];
-  const first = Math.floor(Math.random() * (segment[1] - segment[0] + 1)) + segment[0];
-  return `${first}.${Math.floor(Math.random()*254)+1}.${Math.floor(Math.random()*254)+1}.${Math.floor(Math.random()*254)+1}`;
-}
-
-async function fetchWithFakeHeaders(url, cfConfig = null) {
-  const fakeIp = generateRandomIP();
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'X-Forwarded-For': fakeIp,
-    'X-Real-IP': fakeIp,
-    'Client-IP': fakeIp
-  };
-  
-  const options = { headers };
-  if (cfConfig) options.cf = cfConfig;
-
-  return fetch(url, options);
-}
-
-function kmhToScale(kmh) {
-  const speed = parseFloat(kmh);
-  if (speed < 1) return '0级';
-  if (speed < 6) return '1级';
-  if (speed < 12) return '2级';
-  if (speed < 20) return '3级';
-  if (speed < 29) return '4级';
-  if (speed < 39) return '5级';
-  if (speed < 50) return '6级';
-  if (speed < 62) return '7级';
-  if (speed < 75) return '8级';
-  return '9级+';
-}
-
-function degreesToDir(deg) {
-  const directions = ['北风', '东北风', '东风', '东南风', '南风', '西南风', '西风', '西北风'];
-  const index = Math.round(deg / 45) % 8;
-  return directions[index];
-}
-
-async function getCoordsByCity(city) {
-  try {
-    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`;
-    const res = await fetchWithFakeHeaders(url, { cacheTtl: 86400, cacheEverything: true });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.results && data.results.length > 0) {
-        return {
-          lat: data.results[0].latitude,
-          lon: data.results[0].longitude
-        };
-      }
-    }
-  } catch (e) {}
-  return null;
-}
+import { 
+  corsHeaders, 
+  WEATHER_MAP_ZH, 
+  WEATHER_MAP_EN, 
+  fetchWithFakeHeaders, 
+  kmhToScale, 
+  degreesToDir, 
+  getCoordsByCity 
+} from '../../utils/shared.js';
 
 export async function onRequest(context) {
   const { request } = context;
@@ -66,17 +16,13 @@ export async function onRequest(context) {
   let lat = url.searchParams.get('lat');
   let lon = url.searchParams.get('lon');
   const city = url.searchParams.get('city');
-
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  };
+  const lang = url.searchParams.get('lang') || 'zh';
 
   if (request.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // 如果没有坐标但有城市名，先获取坐标
   if ((!lat || !lon) && city) {
     const coords = await getCoordsByCity(city);
     if (coords) {
@@ -85,51 +31,50 @@ export async function onRequest(context) {
     }
   }
 
-  const WEATHER_MAP = {
-    0: '晴', 1: '晴间多云', 2: '多云', 3: '阴',
-    45: '雾', 48: '白霜', 51: '毛毛雨', 61: '小雨', 63: '中雨', 65: '大雨',
-    71: '小雪', 73: '中雪', 75: '大雪', 80: '阵雨', 95: '雷阵雨',
-    'clear': '晴', 'mcloudy': '多云', 'cloudy': '阴', 'rain': '雨', 
-    'snow': '雪', 'ts': '雷暴', 'lightrain': '小雨', 
-    'oshower': '阵雨', 'ishower': '阵雨', 'lightsnow': '小雪', 'rainsnow': '雨夹雪'
-  };
-
+  // 切换中英文天气字典
+  const WEATHER_MAP = lang === 'en' ? WEATHER_MAP_EN : WEATHER_MAP_ZH;
+  
   let weatherData = null;
   let source = '';
   let debugLog = [];
 
-  const cacheConfig = { cacheTtl: 1800, cacheEverything: true };
+  // Cloudflare 特有的缓存配置
+  const cfOptions = { 
+    cf: { cacheTtl: 1800, cacheEverything: true } 
+  };
 
+  // Plan A: OpenMeteo
   if (lat && lon) {
     try {
       const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&timezone=auto`;
-      const res = await fetchWithFakeHeaders(omUrl, cacheConfig);
+      const res = await fetchWithFakeHeaders(omUrl, cfOptions);
       
       if (res.ok) {
         const data = await res.json();
         const cur = data.current;
         weatherData = {
-          weather: WEATHER_MAP[cur.weather_code] || '未知',
+          weather: WEATHER_MAP[cur.weather_code] || (lang === 'en' ? 'Unknown' : '未知'),
           temp: Math.round(cur.temperature_2m),
-          wind: `${degreesToDir(cur.wind_direction_10m)} ${kmhToScale(cur.wind_speed_10m)}`
+          wind: `${degreesToDir(cur.wind_direction_10m, lang)} ${kmhToScale(cur.wind_speed_10m, lang)}`
         };
         source = 'OpenMeteo';
       } else { debugLog.push(`OpenMeteo Error: ${res.status}`); }
     } catch (e) { debugLog.push(`OpenMeteo Exception: ${e.message}`); }
   }
 
+  // Plan B: 7Timer
   if (!weatherData && lat && lon) {
     try {
       const stUrl = `https://www.7timer.info/bin/api.pl?lon=${lon}&lat=${lat}&product=civil&output=json`;
-      const res = await fetchWithFakeHeaders(stUrl, cacheConfig);
+      const res = await fetchWithFakeHeaders(stUrl, cfOptions);
       if (res.ok) {
         const data = await res.json();
         const cur = data.dataseries && data.dataseries[0];
         if (cur) {
           weatherData = {
-            weather: WEATHER_MAP[cur.weather] || '多云',
+            weather: WEATHER_MAP[cur.weather] || (lang === 'en' ? 'Cloudy' : '多云'),
             temp: cur.temp2m,
-            wind: `${cur.wind10m.speed}级` 
+            wind: lang === 'en' ? `Level ${cur.wind10m.speed}` : `${cur.wind10m.speed}级` 
           };
           source = '7Timer';
         }
@@ -137,20 +82,29 @@ export async function onRequest(context) {
     } catch (e) { debugLog.push(`7Timer Exception: ${e.message}`); }
   }
 
+  // Plan C: Wttr.in
   if (!weatherData) {
     try {
       const query = (lat && lon) ? `${lat},${lon}` : city;
       if (query) {
-        const wttrUrl = `https://wttr.in/${encodeURIComponent(query)}?format=j1&lang=zh`;
-        const res = await fetchWithFakeHeaders(wttrUrl);
+        const wttrLang = lang === 'en' ? 'en' : 'zh';
+        const wttrUrl = `https://wttr.in/${encodeURIComponent(query)}?format=j1&lang=${wttrLang}`;
+        const res = await fetchWithFakeHeaders(wttrUrl); 
         if (res.ok) {
           const data = await res.json();
           const cur = data.current_condition[0];
-          const desc = cur.lang_zh ? cur.lang_zh[0].value : (cur.weatherDesc[0].value || '多云');
+          
+          let desc = 'Unknown';
+          if (lang === 'en') {
+              desc = cur.weatherDesc ? cur.weatherDesc[0].value : 'Cloudy';
+          } else {
+              desc = cur.lang_zh ? cur.lang_zh[0].value : (cur.weatherDesc[0].value || '多云');
+          }
+
           weatherData = {
             weather: desc,
             temp: cur.temp_C,
-            wind: `${degreesToDir(cur.winddirDegree)} ${kmhToScale(cur.windspeedKmph)}`
+            wind: `${degreesToDir(cur.winddirDegree, lang)} ${kmhToScale(cur.windspeedKmph, lang)}`
           };
           source = 'Wttr.in';
         } else { debugLog.push(`Wttr Error: ${res.status}`); }
